@@ -108,8 +108,19 @@ export async function getCredentials(): Promise<MedicalCredential[]> {
   return fetchWithFallback<MedicalCredential[]>('/api/credentials', 'credsj_credentials', defaults);
 }
 
-export async function saveCredential(cred: MedicalCredential): Promise<boolean> {
-  // Sync to database if we can
+export async function saveCredential(cred: MedicalCredential): Promise<any> {
+  // Always update local storage immediately
+  const cached = localStorage.getItem('credsj_credentials');
+  let list: MedicalCredential[] = cached ? JSON.parse(cached) : [];
+  const idx = list.findIndex(c => String(c.id) === String(cred.id) || (c.folio && cred.folio && c.folio === cred.folio));
+  if (idx >= 0) {
+    list[idx] = cred;
+  } else {
+    list.unshift(cred);
+  }
+  safeSetLocalStorage('credsj_credentials', list);
+
+  // Sync to database if server is reachable
   try {
     const res = await fetch('/api/credentials', {
       method: 'POST',
@@ -117,24 +128,24 @@ export async function saveCredential(cred: MedicalCredential): Promise<boolean> 
       body: JSON.stringify(cred)
     });
     if (res.ok) {
-      // Re-fetch list to stay in perfect sync
-      await getCredentials();
+      const data = await res.json();
+      if (data && data.credential) {
+        const serverCred = data.credential;
+        const freshIdx = list.findIndex(c => String(c.id) === String(cred.id) || String(c.id) === String(serverCred.id));
+        if (freshIdx >= 0) {
+          list[freshIdx] = serverCred;
+        } else {
+          list.unshift(serverCred);
+        }
+        safeSetLocalStorage('credsj_credentials', list);
+        return serverCred;
+      }
       return true;
     }
   } catch (e) {
     console.warn("[API] Could not persist credentials to server, updating local cache only.", e);
   }
-  
-  // Local cache direct path fallback
-  const cached = localStorage.getItem('credsj_credentials');
-  let list: MedicalCredential[] = cached ? JSON.parse(cached) : [];
-  const idx = list.findIndex(c => c.id === cred.id);
-  if (idx >= 0) {
-    list[idx] = cred;
-  } else {
-    list.unshift(cred);
-  }
-  safeSetLocalStorage('credsj_credentials', list);
+
   return true;
 }
 

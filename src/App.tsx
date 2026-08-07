@@ -47,8 +47,30 @@ export default function App() {
       try {
         const liveCreds = await getCredentials();
         if (Array.isArray(liveCreds)) {
-          setCredentials(liveCreds);
-          safeSetLocalStorage('credsj_credentials', liveCreds);
+          setCredentials(prev => {
+            const map = new Map<string, MedicalCredential>();
+            // 1. Add all server live credentials
+            liveCreds.forEach(c => {
+              if (c && c.id) {
+                map.set(String(c.id), c);
+              }
+            });
+            // 2. Retain any local credentials not yet on server or matching by folio/cedula
+            prev.forEach(c => {
+              if (!c || !c.id) return;
+              const idStr = String(c.id);
+              if (!map.has(idStr)) {
+                const existingByFolio = c.folio ? Array.from(map.values()).find(item => item.folio && item.folio === c.folio) : null;
+                const existingByCedula = (c.npi && c.npi !== 'SIN_CEDULA') ? Array.from(map.values()).find(item => item.npi && item.npi === c.npi) : null;
+                if (!existingByFolio && !existingByCedula) {
+                  map.set(idStr, c);
+                }
+              }
+            });
+            const merged = Array.from(map.values());
+            safeSetLocalStorage('credsj_credentials', merged);
+            return merged;
+          });
         }
 
         const liveUsers = await getUsers();
@@ -171,9 +193,9 @@ export default function App() {
   // Handler for adding or updating registrations
   const handleAddOrUpdateCredential = async (updatedCred: MedicalCredential, navigateToLegal: boolean = false) => {
     setCredentials(prev => {
-      const exists = prev.some(c => c.id === updatedCred.id);
+      const exists = prev.some(c => c.id === updatedCred.id || (c.folio && updatedCred.folio && c.folio === updatedCred.folio));
       if (exists) {
-        return prev.map(c => c.id === updatedCred.id ? updatedCred : c);
+        return prev.map(c => (c.id === updatedCred.id || (c.folio && updatedCred.folio && c.folio === updatedCred.folio)) ? updatedCred : c);
       } else {
         return [updatedCred, ...prev];
       }
@@ -185,8 +207,11 @@ export default function App() {
       setTargetFormCredentialId(null);
     }
 
-    // Live update save to PostgreSQL
-    await saveCredential(updatedCred);
+    // Live update save to PostgreSQL and local storage
+    const savedRes = await saveCredential(updatedCred);
+    if (savedRes && typeof savedRes === 'object' && savedRes.id) {
+      setCredentials(prev => prev.map(c => (c.id === updatedCred.id || (c.folio && savedRes.folio && c.folio === savedRes.folio)) ? { ...c, ...savedRes } : c));
+    }
   };
 
   // Selection trigger for dashboard actions

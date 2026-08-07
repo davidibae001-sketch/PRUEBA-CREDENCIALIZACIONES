@@ -349,6 +349,10 @@ if (usePG) {
             );
           `);
 
+          await pgPool!.query("ALTER TABLE documentacion ADD COLUMN IF NOT EXISTS vigencia_privilegios DATE");
+          await pgPool!.query("ALTER TABLE documentacion ADD COLUMN IF NOT EXISTS vigencia_conacem DATE");
+          await pgPool!.query("ALTER TABLE documentacion ADD COLUMN IF NOT EXISTS estatus_vig_conacem VARCHAR(50)");
+
           // Automatic cleanup/deduplication for medicos table
           try {
             await pgPool!.query(`
@@ -569,6 +573,42 @@ function normalizeCategoryData(catData: any): { files: any[]; status?: string; e
   return { files: [] };
 }
 
+function sanitizeCredForStorage(credObj: any) {
+  if (!credObj || typeof credObj !== 'object') return credObj;
+  const clone = { ...credObj };
+  const cleanFilesMap = (map: any) => {
+    if (!map || typeof map !== 'object') return map;
+    const cleaned: Record<string, any> = {};
+    for (const [k, v] of Object.entries(map)) {
+      if (!v || typeof v !== 'object') continue;
+      const cat = v as any;
+      const filesArr = Array.isArray(cat.files) ? cat.files.map((f: any) => ({
+        name: f.name || 'Documento.pdf',
+        size: f.size,
+        type: f.type,
+        uploadedAt: f.uploadedAt || new Date().toISOString(),
+        status: f.status || 'VERIFICADO'
+      })) : [];
+      cleaned[k] = {
+        status: cat.status || (filesArr.length > 0 ? 'OTORGADO' : 'PENDIENTE'),
+        expiryDate: cat.expiryDate || null,
+        files: filesArr
+      };
+    }
+    return cleaned;
+  };
+
+  if (clone.categoryFiles) clone.categoryFiles = cleanFilesMap(clone.categoryFiles);
+  if (clone.selectedFiles) clone.selectedFiles = cleanFilesMap(clone.selectedFiles);
+  if (typeof clone.portraitUrl === 'string' && clone.portraitUrl.startsWith('data:')) {
+    delete clone.portraitUrl;
+  }
+  if (typeof clone.signatureUrl === 'string' && clone.signatureUrl.startsWith('data:')) {
+    delete clone.signatureUrl;
+  }
+  return clone;
+}
+
 // Helper to extract OTORGADO vs PENDIENTE status for each category in documentacion table
 function extractDocStatus(selectedFiles: Record<string, any>, categoryFiles: Record<string, any>) {
   const filesMap = { ...categoryFiles, ...selectedFiles };
@@ -585,25 +625,25 @@ function extractDocStatus(selectedFiles: Record<string, any>, categoryFiles: Rec
 
   return {
     solicitudcreden: getStatus(['solicitud_cred', 'solicitudCreden', '1_SOLICITUD_CREDENCIALIZACION']),
-    curriculum: getStatus(['cv', 'curriculum', '2_SINTESIS_CURRICULAR_CV']),
+    curriculum: getStatus(['cv', 'curriculum', '2_CURRICULUM_VITAE', '2_SINTESIS_CURRICULAR_CV']),
     acta_nacimiento: getStatus(['acta', 'acta_nacimiento', '3_ACTA_NACIMIENTO']),
-    ine: getStatus(['ine', '4_INE_IFE_PASAPORTE']),
+    ine: getStatus(['ine', '4_INE_VIGENTE_PASAPORTE', '4_INE_IFE_PASAPORTE']),
     curp: getStatus(['curp', '5_CURP']),
-    rfc: getStatus(['sat', 'rfc', '6_RFC_SAT']),
-    caratula_bancaria: getStatus(['banco', 'caratula_bancaria', '7_CARATULA_ESTADO_CUENTA']),
+    rfc: getStatus(['sat', 'rfc', '6_RFC_CONSTANCIA_FISCAL', '6_RFC_SAT']),
+    caratula_bancaria: getStatus(['banco', 'caratula_bancaria', '7_CARATULA_BANCARIA', '7_CARATULA_ESTADO_CUENTA']),
     comprobante_domicilio: getStatus(['domicilio', 'comprobante_domicilio', '8_COMPROBANTE_DOMICILIO']),
-    cartas_recomendacion: getStatus(['cartas_rec', 'cartas_recomendacion', '9_CARTAS_RECOMENDACION']),
-    responsabilidad_civil: getStatus(['poliza_resp', 'responsabilidad_civil', '10_RESPONSABILIDAD_CIVIL']),
+    cartas_recomendacion: getStatus(['cartas_rec', 'cartas_recomendacion', '9_CARTAS_RECOMENDACION_SOCIOS', '9_CARTAS_RECOMENDACION']),
+    responsabilidad_civil: getStatus(['resp_civil', 'poliza_resp', 'responsabilidad_civil', '10_RESPONSABILIDAD_CIVIL']),
     titulo_profesional: getStatus(['titulo_prof', 'titulo_profesional', '11_TITULO_PROFESIONAL']),
     cedula: getStatus(['cedula_prof', 'cedula', '12_CEDULA_PROFESIONAL']),
-    permiso_ejercer: getStatus(['permiso_son_prof', 'permiso_ejercer', '13_PERMISO_EJERCER_SONORA_PROFESIONAL']),
-    validacion_titulo: getStatus(['val_titulo', 'validacion_titulo', '11_1_VALIDACION_TITULO_CEDULA']),
-    validacion_titulo2: getStatus(['val_titulo2', 'validacion_titulo2', '11_2_VALIDACION_TITULO_CEDULA']),
+    permiso_ejercer: getStatus(['permiso_son_prof', 'permiso_ejercer', '13_PERMISO_EJERCER_SONORA_PROFESION', '13_PERMISO_EJERCER_SONORA_PROFESIONAL']),
+    validacion_titulo: getStatus(['permiso_son_prof_val', 'val_titulo', 'validacion_titulo', '13_1_VALIDACION_FUENTE_ORIGINAL_PERMISO_PROFESION', '11_1_VALIDACION_TITULO_CEDULA']),
+    validacion_titulo2: getStatus(['permiso_son_sub_val', 'val_titulo2', 'validacion_titulo2', '13_2_VALIDACION_FUENTE_ORIGINAL_PERMISO_SUBESPECIALIDAD', '11_2_VALIDACION_TITULO_CEDULA']),
     titulo_especialidad: getStatus(['titulo_esp', 'titulo_especialidad', '14_TITULO_ESPECIALIDAD']),
-    diploma_subespecialidad: getStatus(['diploma_subesp', 'diploma_subesp1', 'diploma_subespecialidad', '14_1_DIPLOMA_SUBESPECIALIDAD_1']),
+    diploma_subespecialidad: getStatus(['diploma_subesp1', 'diploma_subesp', 'diploma_subespecialidad', '14_1_DIPLOMA_SUBESPECIALIDAD_1']),
     diploma_subespecialidad2: getStatus(['diploma_subesp2', 'diploma_subespecialidad2', '14_2_DIPLOMA_SUBESPECIALIDAD_2']),
     cedula_especialidad: getStatus(['cedula_esp', 'cedula_especialidad', '15_CEDULA_ESPECIALIDAD']),
-    cedula_subespecialidad: getStatus(['cedula_subesp', 'cedula_subesp1', 'cedula_subespecialidad', '15_1_CEDULA_SUBESPECIALIDAD_1']),
+    cedula_subespecialidad: getStatus(['cedula_subesp1', 'cedula_subesp', 'cedula_subespecialidad', '15_1_CEDULA_SUBESPECIALIDAD_1']),
     cedula_subespecialidad2: getStatus(['cedula_subesp2', 'cedula_subespecialidad2', '15_2_CEDULA_SUBESPECIALIDAD_2']),
     permiso_ejercerespecialidad: getStatus(['permiso_son_esp', 'permiso_ejercerespecialidad', '16_PERMISO_EJERCER_SONORA_ESPECIALIDAD']),
     cirugiarobotica: getStatus(['robotica_davinci', 'cirugiarobotica', '17_CONSTANCIA_CIRUGIA_ROBOTICA_DAVINCI']),
@@ -630,7 +670,7 @@ app.get("/api/credentials", async (req, res) => {
           d.validacion_titulo, d.validacion_titulo2, d.titulo_especialidad, d.diploma_subespecialidad,
           d.diploma_subespecialidad2, d.cedula_especialidad, d.cedula_subespecialidad,
           d.cedula_subespecialidad2, d.permiso_ejercerespecialidad, d.cirugiarobotica,
-          d.diplomas, d.privilegios, d.conacem, d.validacion_concacem, d.ruta_archivos, d.firma_url
+          d.diplomas, d.privilegios, d.conacem, d.validacion_concacem, d.vigencia_privilegios, d.vigencia_conacem, d.ruta_archivos, d.firma_url
         FROM medicos m
         LEFT JOIN documentacion d ON m.id = d.idmedico
         ORDER BY m.id ASC
@@ -649,6 +689,32 @@ app.get("/api/credentials", async (req, res) => {
         const folderInfo = getCampusFolderInfo(campusName);
         const cleanDocFolder = cleanDoctorNameForFolder(fullDocName);
         const computedWinPath = `${folderInfo.winPath}\\${cleanDocFolder}`;
+
+        // Compute vigencia_privilegios: 5 years from registration date if null
+        let vigPriv: string | null = row.vigencia_privilegios ? String(row.vigencia_privilegios).split('T')[0] : null;
+        if (!vigPriv && row.fecha_registro) {
+          const dReg = new Date(row.fecha_registro);
+          if (!isNaN(dReg.getTime())) {
+            dReg.setFullYear(dReg.getFullYear() + 5);
+            vigPriv = dReg.toISOString().split('T')[0];
+          }
+        }
+
+        let vigConacem: string | null = row.vigencia_conacem ? String(row.vigencia_conacem).split('T')[0] : null;
+
+        let calculatedEstatusVigConacem = 'PENDIENTE';
+        if (vigConacem) {
+          const expD = new Date(vigConacem);
+          const todayD = new Date();
+          todayD.setHours(0, 0, 0, 0);
+          calculatedEstatusVigConacem = expD < todayD ? 'VENCIDA' : 'VIGENTE';
+        } else if (row.conacem === 'OTORGADO' || row.conacem === 'COMPLETADO' || row.conacem === 'VALIDADO') {
+          calculatedEstatusVigConacem = 'VIGENTE';
+        } else {
+          calculatedEstatusVigConacem = 'VENCIDA';
+        }
+
+        const estatusVigConacem = row.estatus_vig_conacem || calculatedEstatusVigConacem;
 
         const documentStatus: Record<string, string> = {
           solicitud_cred: row.solicitudcreden || 'PENDIENTE',
@@ -713,6 +779,9 @@ app.get("/api/credentials", async (req, res) => {
           subspecialty: row.subespecialidad1 || '',
           subspecialty2: row.subespecialidad2 || '',
           isPartner: row.es_socio === 'SI' || row.es_socio === 'true' || row.es_socio === true,
+          vigenciaPrivilegios: vigPriv,
+          vigenciaConacem: vigConacem,
+          estatusVigConacem: estatusVigConacem,
           folderName: cleanDocFolder,
           rutaArchivos: row.ruta_archivos || computedWinPath,
           documentStatus: documentStatus,
@@ -773,6 +842,35 @@ app.post("/api/credentials", async (req, res) => {
   const docsStatus = extractDocStatus(cred.selectedFiles || {}, cred.categoryFiles || {});
   const fotoVal = cred.portraitUrl || cred.foto_url || null;
   const firmaVal = cred.signatureUrl || cred.firma_url || null;
+
+  // Vigencia Privilegios: registration date + 5 years unless explicitly provided
+  let vigenciaPrivVal = cred.vigenciaPrivilegios || cred.vigencia_privilegios || null;
+  if (!vigenciaPrivVal && regVal) {
+    const dReg = new Date(regVal);
+    if (!isNaN(dReg.getTime())) {
+      dReg.setFullYear(dReg.getFullYear() + 5);
+      vigenciaPrivVal = dReg.toISOString().split('T')[0];
+    }
+  }
+
+  // Vigencia CONACEM: digitized expiry date from consejo category or cred.vigenciaConacem / cred.consejoExpiryDate
+  let vigenciaConacemVal = cred.vigenciaConacem || cred.vigencia_conacem || cred.consejoExpiryDate || null;
+  if (!vigenciaConacemVal && (cred.selectedFiles?.consejo || cred.categoryFiles?.consejo)) {
+    const catConsejo = normalizeCategoryData(cred.selectedFiles?.consejo || cred.categoryFiles?.consejo);
+    if (catConsejo.expiryDate) vigenciaConacemVal = catConsejo.expiryDate;
+  }
+
+  let estatusVigConacemVal = cred.estatusVigConacem || 'PENDIENTE';
+  if (vigenciaConacemVal) {
+    const expD = new Date(vigenciaConacemVal);
+    const todayD = new Date();
+    todayD.setHours(0, 0, 0, 0);
+    estatusVigConacemVal = expD < todayD ? 'VENCIDA' : 'VIGENTE';
+  } else if (docsStatus.conacem === 'OTORGADO' || docsStatus.conacem === 'COMPLETADO' || docsStatus.conacem === 'VALIDADO') {
+    estatusVigConacemVal = 'VIGENTE';
+  } else {
+    estatusVigConacemVal = 'VENCIDA';
+  }
 
   let assignedId: string = String(cred.id || '');
   let assignedFolio: string = cred.folio || '';
@@ -881,15 +979,15 @@ app.post("/api/credentials", async (req, res) => {
             responsabilidad_civil = $11, titulo_profesional = $12, cedula = $13, permiso_ejercer = $14, validacion_titulo = $15,
             validacion_titulo2 = $16, titulo_especialidad = $17, diploma_subespecialidad = $18, diploma_subespecialidad2 = $19, cedula_especialidad = $20,
             cedula_subespecialidad = $21, cedula_subespecialidad2 = $22, permiso_ejercerespecialidad = $23, cirugiarobotica = $24, diplomas = $25,
-            privilegios = $26, conacem = $27, validacion_concacem = $28, ruta_archivos = $29, firma_url = $30
-          WHERE idmedico = $31`,
+            privilegios = $26, conacem = $27, validacion_concacem = $28, vigencia_privilegios = $29, vigencia_conacem = $30, estatus_vig_conacem = $31, ruta_archivos = $32, firma_url = $33
+          WHERE idmedico = $34`,
           [
             fotoVal, docsStatus.solicitudcreden, docsStatus.curriculum, docsStatus.acta_nacimiento, docsStatus.ine,
             docsStatus.curp, docsStatus.rfc, docsStatus.caratula_bancaria, docsStatus.comprobante_domicilio, docsStatus.cartas_recomendacion,
             docsStatus.responsabilidad_civil, docsStatus.titulo_profesional, docsStatus.cedula, docsStatus.permiso_ejercer, docsStatus.validacion_titulo,
             docsStatus.validacion_titulo2, docsStatus.titulo_especialidad, docsStatus.diploma_subespecialidad, docsStatus.diploma_subespecialidad2, docsStatus.cedula_especialidad,
             docsStatus.cedula_subespecialidad, docsStatus.cedula_subespecialidad2, docsStatus.permiso_ejercerespecialidad, docsStatus.cirugiarobotica, docsStatus.diplomas,
-            docsStatus.privilegios, docsStatus.conacem, docsStatus.validacion_concacem, rutaArchivosVal, firmaVal, medicoDbId
+            docsStatus.privilegios, docsStatus.conacem, docsStatus.validacion_concacem, vigenciaPrivVal, vigenciaConacemVal, estatusVigConacemVal, rutaArchivosVal, firmaVal, medicoDbId
           ]
         );
       } else {
@@ -900,14 +998,14 @@ app.post("/api/credentials", async (req, res) => {
             responsabilidad_civil, titulo_profesional, cedula, permiso_ejercer, validacion_titulo,
             validacion_titulo2, titulo_especialidad, diploma_subespecialidad, diploma_subespecialidad2, cedula_especialidad,
             cedula_subespecialidad, cedula_subespecialidad2, permiso_ejercerespecialidad, cirugiarobotica, diplomas,
-            privilegios, conacem, validacion_concacem, ruta_archivos, firma_url
+            privilegios, conacem, validacion_concacem, vigencia_privilegios, vigencia_conacem, estatus_vig_conacem, ruta_archivos, firma_url
           ) VALUES (
             $1, $2, $3, $4, $5, $6,
             $7, $8, $9, $10, $11,
             $12, $13, $14, $15, $16,
             $17, $18, $19, $20, $21,
             $22, $23, $24, $25, $26,
-            $27, $28, $29, $30, $31
+            $27, $28, $29, $30, $31, $32, $33, $34
           )`,
           [
             medicoDbId, fotoVal, docsStatus.solicitudcreden, docsStatus.curriculum, docsStatus.acta_nacimiento, docsStatus.ine,
@@ -915,7 +1013,7 @@ app.post("/api/credentials", async (req, res) => {
             docsStatus.responsabilidad_civil, docsStatus.titulo_profesional, docsStatus.cedula, docsStatus.permiso_ejercer, docsStatus.validacion_titulo,
             docsStatus.validacion_titulo2, docsStatus.titulo_especialidad, docsStatus.diploma_subespecialidad, docsStatus.diploma_subespecialidad2, docsStatus.cedula_especialidad,
             docsStatus.cedula_subespecialidad, docsStatus.cedula_subespecialidad2, docsStatus.permiso_ejercerespecialidad, docsStatus.cirugiarobotica, docsStatus.diplomas,
-            docsStatus.privilegios, docsStatus.conacem, docsStatus.validacion_concacem, rutaArchivosVal, firmaVal
+            docsStatus.privilegios, docsStatus.conacem, docsStatus.validacion_concacem, vigenciaPrivVal, vigenciaConacemVal, estatusVigConacemVal, rutaArchivosVal, firmaVal
           ]
         );
       }
@@ -954,14 +1052,16 @@ app.post("/api/credentials", async (req, res) => {
     documentStatus: docsStatus
   };
 
+  const sanitizedFallbackObj = sanitizeCredForStorage(fullCredObject);
+
   const existsIdx = creds.findIndex((c: any) => 
     String(c.id) === String(assignedId) || 
     (c.folio && c.folio === assignedFolio)
   );
   if (existsIdx >= 0) {
-    creds[existsIdx] = { ...creds[existsIdx], ...fullCredObject };
+    creds[existsIdx] = { ...creds[existsIdx], ...sanitizedFallbackObj };
   } else {
-    creds.unshift(fullCredObject);
+    creds.unshift(sanitizedFallbackObj);
   }
   saveFallbackFile("credentials.json", creds);
 
@@ -1007,6 +1107,43 @@ app.delete("/api/credentials/:id", async (req, res) => {
   }
 
   res.json({ success: true });
+});
+
+// Update Vigencia Privilegios (+5 years or custom date)
+app.post("/api/update-vigencia-privilegios", async (req, res) => {
+  const { doctorId, customDate } = req.body;
+  if (!doctorId) return res.status(400).json({ error: "doctorId is required" });
+
+  try {
+    let newDate = customDate;
+    if (!newDate) {
+      const dNow = new Date();
+      dNow.setFullYear(dNow.getFullYear() + 5);
+      newDate = dNow.toISOString().split('T')[0];
+    }
+
+    if (usePG && pgPool && pgAvailable) {
+      const numericId = parseInt(String(doctorId), 10);
+      if (!isNaN(numericId)) {
+        await pgPool.query(
+          "UPDATE documentacion SET vigencia_privilegios = $1 WHERE idmedico = $2",
+          [newDate, numericId]
+        );
+      }
+    }
+
+    const creds = getFallbackFile("credentials.json", DEFAULT_CREDENTIALS);
+    const idx = creds.findIndex((c: any) => String(c.id) === String(doctorId));
+    if (idx >= 0) {
+      creds[idx].vigenciaPrivilegios = newDate;
+      saveFallbackFile("credentials.json", creds);
+    }
+
+    return res.json({ success: true, vigenciaPrivilegios: newDate });
+  } catch (err: any) {
+    console.error("Error updating vigencia privilegios:", err);
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // Purge Endpoint to reset database and physical ghost records to zero
@@ -1591,19 +1728,30 @@ const CATEGORY_NAME_MAP: Record<string, string> = {
   banco: '7_CARATULA_BANCARIA',
   domicilio: '8_COMPROBANTE_DOMICILIO',
   cartas_rec: '9_CARTAS_RECOMENDACION_SOCIOS',
-  titulo_prof: '10_TITULO_PROFESIONAL',
-  cedula_prof: '11_CEDULA_PROFESIONAL',
-  permiso_son_prof: '12_PERMISO_EJERCER_SONORA_PROFESION',
-  titulo_esp: '13_TITULO_ESPECIALIDAD',
-  cedula_esp: '14_CEDULA_ESPECIALIDAD',
-  permiso_son_esp: '15_PERMISO_EJERCER_SONORA_ESPECIALIDAD',
-  robotica_davinci: '16_CONSTANCIA_CIRUGIA_ROBOTICA_DAVINCI',
-  diplomas: '17_DIPLOMAS_Y_CURSOS_2_ANOS',
-  solicitud_priv: '18_SOLICITUD_PRIVILEGIOS_ESPECIALIDAD',
-  acls: '19_ACLS_ANESTESIOLOGOS',
+  resp_civil: '10_RESPONSABILIDAD_CIVIL',
+
+  titulo_prof: '11_TITULO_PROFESIONAL',
+  cedula_prof: '12_CEDULA_PROFESIONAL',
+  permiso_son_prof: '13_PERMISO_EJERCER_SONORA_PROFESION',
+  permiso_son_prof_val: '13_1_VALIDACION_FUENTE_ORIGINAL_PERMISO_PROFESION',
+  permiso_son_sub_val: '13_2_VALIDACION_FUENTE_ORIGINAL_PERMISO_SUBESPECIALIDAD',
+
+  titulo_esp: '14_TITULO_ESPECIALIDAD',
+  diploma_subesp1: '14_1_DIPLOMA_SUBESPECIALIDAD_1',
+  diploma_subesp2: '14_2_DIPLOMA_SUBESPECIALIDAD_2',
+  cedula_esp: '15_CEDULA_ESPECIALIDAD',
+  cedula_subesp1: '15_1_CEDULA_SUBESPECIALIDAD_1',
+  cedula_subesp2: '15_2_CEDULA_SUBESPECIALIDAD_2',
+  permiso_son_esp: '16_PERMISO_EJERCER_SONORA_ESPECIALIDAD',
+
+  robotica_davinci: '17_CONSTANCIA_CIRUGIA_ROBOTICA_DAVINCI',
+  diplomas: '18_DIPLOMAS_Y_CURSOS_2_ANOS',
+
+  solicitud_priv: '19_SOLICITUD_PRIVILEGIOS_ESPECIALIDAD',
   consejo: '20_CERTIFICADO_CONSEJO_ESPECIALIDAD',
-  trasplante_renal: '21_CERTIFICADO_TRASPLANTE_RENAL',
-  archivos_adicionales: '22_ARCHIVOS_ADICIONALES',
+  consejo_val_conacem: '20_1_VALIDACION_CONACEM',
+
+  archivos_adicionales: 'ARCHIVOS_ADICIONALES',
   carta_comp: 'CARTA_COMPROMISO'
 };
 

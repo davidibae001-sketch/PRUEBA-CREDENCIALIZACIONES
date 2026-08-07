@@ -28,6 +28,8 @@ export default function CredentialsDashboard({
 }: CredentialsDashboardProps) {
 
   const [selectedCampusFilter, setSelectedCampusFilter] = useState<string>('todos');
+  const [activeTab, setActiveTab] = useState<'pending' | 'expirations' | 'all_vigencias'>('pending');
+  const [updatingVigenciaId, setUpdatingVigenciaId] = useState<string | null>(null);
 
   // Filter credentials by campus selection
   const filteredCredentials = credentials.filter(c => {
@@ -35,114 +37,142 @@ export default function CredentialsDashboard({
     return c.campus === selectedCampusFilter;
   });
 
+  // Calculate Privilegios expiration (Punto 19: 5 years from registration date)
+  const getPrivilegiosExpiry = (cred: MedicalCredential) => {
+    if (cred.vigenciaPrivilegios) return cred.vigenciaPrivilegios;
+    if (cred.enrollmentDate) {
+      const d = new Date(cred.enrollmentDate);
+      if (!isNaN(d.getTime())) {
+        d.setFullYear(d.getFullYear() + 5);
+        return d.toISOString().split('T')[0];
+      }
+    }
+    const dNow = new Date();
+    dNow.setFullYear(dNow.getFullYear() + 5);
+    return dNow.toISOString().split('T')[0];
+  };
+
+  // Calculate CONACEM expiration (Punto 20)
+  const getConacemExpiry = (cred: MedicalCredential) => {
+    return cred.vigenciaConacem || cred.consejoExpiryDate || null;
+  };
+
+  // Evaluate expirations for Privilegios and CONACEM
+  const getVigenciaExpirations = (cred: MedicalCredential) => {
+    const items: { type: 'privilegios' | 'conacem'; title: string; expiryDate: string; isExpired: boolean; isSoon: boolean }[] = [];
+    const today = new Date();
+
+    // 1. Privilegios (Punto 19)
+    const privExpStr = getPrivilegiosExpiry(cred);
+    if (privExpStr) {
+      const expDate = new Date(privExpStr);
+      const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
+      const isExpired = diffDays < 0;
+      const isSoon = diffDays >= 0 && diffDays <= 180;
+      if (isExpired || isSoon) {
+        items.push({
+          type: 'privilegios',
+          title: isExpired ? `Solicitud de Privilegios Expirada (Venció: ${privExpStr})` : `Privilegios Próximos a Vencer (Vence: ${privExpStr})`,
+          expiryDate: privExpStr,
+          isExpired,
+          isSoon
+        });
+      }
+    }
+
+    // 2. CONACEM (Punto 20)
+    const conacemExpStr = getConacemExpiry(cred);
+    if (conacemExpStr) {
+      const expDate = new Date(conacemExpStr);
+      const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
+      const isExpired = diffDays < 0;
+      const isSoon = diffDays >= 0 && diffDays <= 180;
+      if (isExpired || isSoon) {
+        items.push({
+          type: 'conacem',
+          title: isExpired ? `Certificación CONACEM Expirada (Venció: ${conacemExpStr})` : `Certificación CONACEM Próxima a Vencer (Vence: ${conacemExpStr})`,
+          expiryDate: conacemExpStr,
+          isExpired,
+          isSoon
+        });
+      }
+    }
+
+    return items;
+  };
+
   // Quantities computations
   const totalRegistered = filteredCredentials.length;
   const verifiedCount = filteredCredentials.filter(c => c.status === 'VERIFICADO').length;
-  const pendingCount = filteredCredentials.filter(c => c.status === 'PENDIENTE').length;
-  const missingDocsCount = filteredCredentials.filter(c => c.status === 'FALTAN_DOCUMENTOS').length;
+  const pendingCount = filteredCredentials.filter(c => c.status !== 'VERIFICADO').length;
+
+  // Physicians with expired/soon-to-expire vigencias
+  const doctorsWithExpirations = filteredCredentials.map(c => ({
+    ...c,
+    expirations: getVigenciaExpirations(c),
+    privilegiosDate: getPrivilegiosExpiry(c),
+    conacemDate: getConacemExpiry(c)
+  })).filter(c => c.expirations.length > 0);
+
+  const expiredVigenciasCount = doctorsWithExpirations.length;
   
   // Staff vs Externo breakdown
   const staffCount = filteredCredentials.filter(c => c.physicianType !== 'Externo').length;
   const externoCount = filteredCredentials.filter(c => c.physicianType === 'Externo').length;
   const staffPercentage = totalRegistered > 0 ? Math.round((staffCount / totalRegistered) * 100) : 0;
   const externoPercentage = totalRegistered > 0 ? Math.round((externoCount / totalRegistered) * 100) : 0;
-  
-  // Expiration detection
-  const currentLocalTime = new Date('2026-05-28');
-  
-  const getExpiredDocuments = (cred: MedicalCredential) => {
-    const expiredList: string[] = [];
-    const expiries: Record<string, string> = {};
 
-    const docNames: Record<string, string> = {
-      ine: 'Identificación Oficial (INE)',
-      acta: 'Acta de Nacimiento Certificada',
-      curp: 'CURP Oficial Validado',
-      sat: 'Cédula Fiscal (Situación SAT)',
-      domicilio: 'Comprobante de Domicilio',
-      banco: 'Carátula de Cuenta de Banco',
-      titulo_prof: 'Título de Médico Cirujano',
-      cedula_prof: 'Cédula Profesional Federal',
-      permiso_son_prof: 'Registro Estatal de Sonora (Gral)',
-      cv: 'Curriculum Vitae',
-      titulo_esp: 'Título de la Especialidad',
-      cedula_esp: 'Cédula de Especialista Federal',
-      permiso_son_esp: 'Registro Estatal de Sonora (Esp)',
-      consejo: 'Certificación del Consejo',
-      acls: 'Certificación de ACLS',
-      diplomas: 'Diplomas y Formación',
-      solicitud_cred: 'Solicitud de Credencialización',
-      solicitud_priv: 'Solicitud de Privilegios HSJ',
-      cartas_rec: 'Cartas de Recomendación',
-      carta_comp: 'Carta Compromiso'
-    };
-
-    // 1. Populate from top-level fields
-    if (cred.cedulaExpiryDate && cred.cedulaExpiryDate !== 'N/A') expiries['cedula_prof'] = cred.cedulaExpiryDate;
-    if (cred.consejoExpiryDate && cred.consejoExpiryDate !== 'N/A') expiries['consejo'] = cred.consejoExpiryDate;
-    if (cred.ineExpiryDate && cred.ineExpiryDate !== 'N/A') expiries['ine'] = cred.ineExpiryDate;
-    if (cred.tituloExpiryDate && cred.tituloExpiryDate !== 'N/A') expiries['titulo_prof'] = cred.tituloExpiryDate;
-
-    // 2. Populate from c.documentExpirations
-    if (cred.documentExpirations) {
-      Object.entries(cred.documentExpirations).forEach(([key, value]) => {
-        if (value && value !== 'N/A') {
-          expiries[key] = value;
-        }
-      });
-    }
-
-    // 3. Evaluate each one
-    const sixMonthsLater = new Date(currentLocalTime);
-    sixMonthsLater.setMonth(sixMonthsLater.getMonth() + 6);
-
-    Object.entries(expiries).forEach(([key, dateStr]) => {
-      const docDate = new Date(dateStr);
-      const isExpired = docDate < currentLocalTime;
-      const isSoon = docDate >= currentLocalTime && docDate <= sixMonthsLater;
-
-      if (isExpired || isSoon) {
-        const friendlyName = docNames[key] || key.replace('_', ' ').toUpperCase();
-        const label = isExpired 
-          ? `${friendlyName} Expirado (Venció: ${dateStr})`
-          : `${friendlyName} Próximo a Vencer (Vence: ${dateStr} - en < 6 meses)`;
-        if (!expiredList.includes(label)) {
-          expiredList.push(label);
-        }
-      }
-    });
-
-    return expiredList;
-  };
-
+  // Pending requirements per physician (without "REVISIÓN LEGAL")
   const getPendingItems = (cred: MedicalCredential) => {
     const items: string[] = [];
-    if (cred.status === 'FALTAN_DOCUMENTOS') {
-      if (!cred.hasCedula) items.push('Falta Archivo Cédula Federal');
-      if (!cred.hasTitulo) items.push('Falta Archivo Título Profesional');
+    if (cred.status === 'FALTAN_DOCUMENTOS' || cred.status === 'PENDIENTE') {
+      if (!cred.hasCedula) items.push('Falta Cédula Federal');
+      if (!cred.hasTitulo) items.push('Falta Título Profesional');
     }
     if (!cred.signatureUrl) {
-      items.push('Firma Autógrafa Legal Pendiente');
+      items.push('Firma Autógrafa Pendiente');
     }
-    if (!cred.fingerprintMapped) {
-      items.push('Registro Biométrico de Huella Requerido');
+    if (cred.status !== 'VERIFICADO' && items.length === 0) {
+      items.push('Proceso de Credencialización Pendiente de Validación Final');
     }
-    // Expired documents count too
-    const expired = getExpiredDocuments(cred);
-    items.push(...expired);
-
-    if (cred.status === 'PENDIENTE' && items.length === 0) {
-      items.push('Sello de Aprobación de Credencialización en espera');
-    }
-
     return items;
   };
 
-  // List of doctors with pending processes
-  const doctorsWithPending = filteredCredentials.map(c => ({
+  // List of doctors with pending status
+  const doctorsWithPending = filteredCredentials.filter(c => c.status !== 'VERIFICADO').map(c => ({
     ...c,
     pendings: getPendingItems(c)
-  })).filter(c => c.status !== 'VERIFICADO' || c.pendings.length > 0);
+  }));
+
+  // Update Privilegios (+5 years)
+  const handleUpdatePrivilegiosVigencia = async (doctorId: string) => {
+    setUpdatingVigenciaId(doctorId);
+    try {
+      const dNow = new Date();
+      dNow.setFullYear(dNow.getFullYear() + 5);
+      const newDateStr = dNow.toISOString().split('T')[0];
+
+      const res = await fetch('/api/update-vigencia-privilegios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doctorId, customDate: newDateStr })
+      });
+      if (res.ok) {
+        const credItem = filteredCredentials.find(c => c.id === doctorId);
+        if (credItem) {
+          credItem.vigenciaPrivilegios = newDateStr;
+        }
+        alert(`✅ Vigencia de Privilegios actualizada exitosamente a 5 años más (${newDateStr}).`);
+        window.location.reload();
+      } else {
+        alert('Error al actualizar la vigencia de privilegios.');
+      }
+    } catch (err) {
+      console.error('Error updating privilegios:', err);
+    } finally {
+      setUpdatingVigenciaId(null);
+    }
+  };
 
   // Specialties distribution map
   const specialtyStats: Record<string, number> = {};
@@ -328,25 +358,31 @@ export default function CredentialsDashboard({
           </div>
 
           {/* Card 3: PENDIENTE */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200/70 shadow-sm flex items-center justify-between">
+          <div 
+            onClick={() => setActiveTab('pending')}
+            className={`p-6 rounded-2xl border transition-all cursor-pointer shadow-sm flex items-center justify-between ${activeTab === 'pending' ? 'bg-amber-50/80 border-amber-300 ring-2 ring-amber-400/30' : 'bg-white border-slate-200/70 hover:border-amber-200'}`}
+          >
             <div className="space-y-1">
               <span className="text-[10px] font-extrabold text-amber-900 uppercase tracking-widest block">Trámites Pendientes</span>
               <span className="text-4xl font-black text-amber-600 font-headline block">{pendingCount}</span>
-              <span className="text-[10px] font-bold text-amber-600 tracking-wide block">En revisión de legal</span>
+              <span className="text-[10px] font-bold text-amber-700 tracking-wide block">Estatus no verificado</span>
             </div>
-            <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
+            <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center">
               <Clock className="w-6 h-6" />
             </div>
           </div>
 
-          {/* Card 4: MISSING OR EXPIRED PAPERS */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200/70 shadow-sm flex items-center justify-between">
+          {/* Card 4: EXPIRADOS */}
+          <div 
+            onClick={() => setActiveTab('expirations')}
+            className={`p-6 rounded-2xl border transition-all cursor-pointer shadow-sm flex items-center justify-between ${activeTab === 'expirations' ? 'bg-red-50/80 border-red-300 ring-2 ring-red-400/30' : 'bg-white border-slate-200/70 hover:border-red-200'}`}
+          >
             <div className="space-y-1">
-              <span className="text-[10px] font-extrabold text-red-900 uppercase tracking-widest block">Faltantes o Expirados</span>
-              <span className="text-4xl font-black text-[#af101a] font-headline block">{missingDocsCount}</span>
-              <span className="text-[10px] font-bold text-red-600 tracking-wide block">Requieren actualización</span>
+              <span className="text-[10px] font-extrabold text-red-900 uppercase tracking-widest block">Vigencias Expiradas</span>
+              <span className="text-4xl font-black text-[#af101a] font-headline block">{expiredVigenciasCount}</span>
+              <span className="text-[10px] font-bold text-red-600 tracking-wide block">Privilegios (19) & CONACEM (20)</span>
             </div>
-            <div className="w-12 h-12 rounded-2xl bg-red-50 text-[#af101a] flex items-center justify-center">
+            <div className="w-12 h-12 rounded-2xl bg-red-100 text-[#af101a] flex items-center justify-center">
               <AlertCircle className="w-6 h-6" />
             </div>
           </div>
@@ -355,93 +391,219 @@ export default function CredentialsDashboard({
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
-          {/* Main workspace (Left 8/12 - Pending items breakdown per physician) */}
+          {/* Main workspace (Left 8/12 - Pending items or Expirations breakdown per physician) */}
           <div className="col-span-12 lg:col-span-8 bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col justify-between">
             <div>
-              <div className="px-6 py-5 border-b border-slate-100 flex items-center gap-2">
-                <Shield className="w-5 h-5 text-[#af101a]" />
-                <h2 className="font-headline font-bold text-lg text-slate-900">Detalle de Trámites y Requerimientos Pendientes</h2>
+              {/* Header with Navigation Tabs */}
+              <div className="px-6 py-4 border-b border-slate-200 bg-slate-50/80 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Shield className="w-5 h-5 text-[#af101a]" />
+                  <h2 className="font-headline font-bold text-base text-slate-900">
+                    {activeTab === 'pending' && 'Trámites Pendientes de Credencialización'}
+                    {activeTab === 'expirations' && 'Alertas de Vigencias Expiradas o Próximas a Vencer'}
+                    {activeTab === 'all_vigencias' && 'Control General de Vigencias (Privilegios y CONACEM)'}
+                  </h2>
+                </div>
+
+                <div className="flex items-center gap-1.5 bg-white p-1 rounded-xl border border-slate-200 shadow-2xs text-xs font-bold">
+                  <button
+                    onClick={() => setActiveTab('pending')}
+                    className={`px-3 py-1.5 rounded-lg transition-all ${
+                      activeTab === 'pending' 
+                        ? 'bg-[#af101a] text-white shadow-xs' 
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    Trámites Pendientes ({pendingCount})
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('expirations')}
+                    className={`px-3 py-1.5 rounded-lg transition-all ${
+                      activeTab === 'expirations' 
+                        ? 'bg-[#af101a] text-white shadow-xs' 
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    Expirados ({expiredVigenciasCount})
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('all_vigencias')}
+                    className={`px-3 py-1.5 rounded-lg transition-all ${
+                      activeTab === 'all_vigencias' 
+                        ? 'bg-[#af101a] text-white shadow-xs' 
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    Todas las Vigencias
+                  </button>
+                </div>
               </div>
               
-              {doctorsWithPending.length === 0 ? (
-                <div className="p-12 text-center text-slate-400 font-medium">
-                  {totalRegistered === 0 ? (
-                    <div className="space-y-4">
-                      <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto">
-                        <Users className="w-6 h-6" />
-                      </div>
-                      <p className="text-sm">No hay médicos registrados actualmente en el hospital.</p>
-                      <button 
-                        onClick={onNavigateToForm}
-                        className="bg-primary text-white text-xs font-bold uppercase tracking-wider px-5 py-2.5 rounded-xl hover:bg-primary-hover shadow-sm"
-                      >
-                        Registrar Primer Médico
-                      </button>
+              {/* TAB 1: PENDING TRÁMITES */}
+              {activeTab === 'pending' && (
+                <div>
+                  {doctorsWithPending.length === 0 ? (
+                    <div className="p-12 text-center text-slate-400 font-medium">
+                      {totalRegistered === 0 ? (
+                        <div className="space-y-4">
+                          <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto">
+                            <Users className="w-6 h-6" />
+                          </div>
+                          <p className="text-sm">No hay médicos registrados actualmente en el hospital.</p>
+                          <button 
+                            onClick={onNavigateToForm}
+                            className="bg-primary text-white text-xs font-bold uppercase tracking-wider px-5 py-2.5 rounded-xl hover:bg-primary-hover shadow-sm"
+                          >
+                            Registrar Primer Médico
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                            <CheckCircle2 className="w-6 h-6" />
+                          </div>
+                          <p className="text-sm text-slate-800 font-bold">¡Excelente! Todos los médicos están en estatus VERIFICADO.</p>
+                          <p className="text-xs text-slate-400">No hay trámites pendientes de aprobación en el sistema.</p>
+                        </div>
+                      )}
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
-                        <CheckCircle2 className="w-6 h-6" />
-                      </div>
-                      <p className="text-sm text-slate-800 font-bold">¡Excelente! Todos los médicos están completamente validados.</p>
-                      <p className="text-xs text-slate-400">No se detectaron expedientes inconclusos ni firmas pendientes.</p>
+                    <div className="divide-y divide-slate-100">
+                      {doctorsWithPending.map(dr => (
+                        <div key={dr.id} className="p-6 hover:bg-slate-50/50 transition-colors flex flex-col sm:flex-row sm:items-start justify-between gap-6">
+                          <div className="space-y-3">
+                            <div>
+                              <div className="flex items-center flex-wrap gap-2">
+                                <p className="font-bold text-sm text-slate-800 uppercase tracking-tight">{dr.firstName} {dr.lastName}</p>
+                                <span className="bg-slate-100 text-slate-700 text-[9.5px] font-black uppercase px-2 py-0.5 rounded border border-slate-200">
+                                  🏥 {dr.campus || 'Hermosillo'}
+                                </span>
+                                <span className={`text-[9.5px] font-black uppercase px-2 py-0.5 rounded border ${dr.physicianType === 'Externo' ? 'bg-amber-50 text-amber-900 border-amber-200' : 'bg-red-50 text-[#af101a] border-red-100'}`}>
+                                  {dr.physicianType === 'Externo' ? 'Médico Externo' : 'Médico Staff'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-400 font-bold mt-1">{dr.specialty} • Cédula: {dr.npi || 'S/N'} • Fecha de Registro: {dr.enrollmentDate}</p>
+                            </div>
+
+                            {/* Specific listed pendings */}
+                            <div className="space-y-2">
+                              <p className="text-[10px] font-extrabold uppercase tracking-wide text-amber-800">Requerimientos pendientes:</p>
+                              <ul className="space-y-1 ml-1">
+                                {dr.pendings.map((p, i) => (
+                                  <li key={i} className="text-xs font-semibold text-slate-700 flex items-center gap-2">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                    <span>{p}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+
+                          <div className="flex sm:flex-col justify-end items-end gap-2 self-start sm:self-auto w-full sm:w-auto">
+                            <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                              {dr.status}
+                            </span>
+                            
+                            <button
+                              onClick={() => onNavigateToConsent(dr.id)}
+                              className="text-[10px] font-black uppercase tracking-widest text-[#af101a] bg-slate-50 border border-slate-200 hover:bg-red-50 px-3 py-1.5 rounded cursor-pointer transition-all"
+                            >
+                              Firmar Acuerdo
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
-              ) : (
-                <div className="divide-y divide-slate-100">
-                  {doctorsWithPending.map(dr => (
-                    <div key={dr.id} className="p-6 hover:bg-slate-50/50 transition-colors flex flex-col sm:flex-row sm:items-start justify-between gap-6">
-                      <div className="space-y-3">
-                        <div>
-                          <div className="flex items-center flex-wrap gap-2">
-                            <p className="font-bold text-sm text-slate-800 uppercase tracking-tight">{dr.firstName} {dr.lastName}</p>
-                            <span className="bg-slate-100 text-slate-700 text-[9.5px] font-black uppercase px-2 py-0.5 rounded border border-slate-200">
-                              🏥 {dr.campus || 'Hermosillo'}
-                            </span>
-                            <span className={`text-[9.5px] font-black uppercase px-2 py-0.5 rounded border ${dr.physicianType === 'Externo' ? 'bg-amber-50 text-amber-900 border-amber-200' : 'bg-red-50 text-[#af101a] border-red-100'}`}>
-                              {dr.physicianType === 'Externo' ? 'Médico Externo' : 'Médico Staff'}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-400 font-bold mt-1">{dr.specialty} • Cédula ID: {dr.npi} • Registrado el: {dr.enrollmentDate}</p>
-                        </div>
+              )}
 
-                        {/* Specific listed pendings */}
-                        <div className="space-y-2.5">
-                          <p className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400">Pendientes documentados:</p>
-                          <ul className="space-y-1.5 ml-1">
-                            {dr.pendings.map((p, i) => (
-                              <li key={i} className="text-xs font-semibold text-slate-600 flex items-center gap-2">
-                                <span className="w-1.5 h-1.5 rounded-full bg-red-650" />
-                                <span>{p}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
+              {/* TAB 2 & TAB 3: EXPIRATIONS & ALL VIGENCIAS */}
+              {(activeTab === 'expirations' || activeTab === 'all_vigencias') && (
+                <div>
+                  {((activeTab === 'expirations' ? doctorsWithExpirations : filteredCredentials).length === 0) ? (
+                    <div className="p-12 text-center text-slate-400 font-medium">
+                      <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-2">
+                        <CheckCircle2 className="w-6 h-6" />
                       </div>
-
-                      <div className="flex sm:flex-col justify-end items-end gap-2 self-start sm:self-auto w-full sm:w-auto">
-                        <div className="flex-1 sm:flex-initial text-right">
-                          <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded inline-block ${
-                            dr.status === 'FALTAN_DOCUMENTOS' 
-                              ? 'bg-red-50 text-red-850 border border-red-100'
-                              : 'bg-amber-50 text-amber-850 border border-amber-100'
-                          }`}>
-                            {dr.status}
-                          </span>
-                        </div>
-                        
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => onNavigateToConsent(dr.id)}
-                            className="text-[10px] font-black uppercase tracking-widest text-[#af101a] bg-slate-50 border border-slate-200 hover:bg-red-50 px-3 py-1.5 rounded"
-                          >
-                            Firmar Acuerdo
-                          </button>
-                        </div>
-                      </div>
+                      <p className="text-sm text-slate-800 font-bold">Sin alertas de vigencias expiradas.</p>
+                      <p className="text-xs text-slate-400">Todos los documentos de Privilegios y CONACEM están al día.</p>
                     </div>
-                  ))}
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {(activeTab === 'expirations' ? doctorsWithExpirations : filteredCredentials).map(dr => {
+                        const privExpiry = getPrivilegiosExpiry(dr);
+                        const conacemExpiry = getConacemExpiry(dr);
+
+                        const today = new Date();
+                        const isPrivExpired = privExpiry ? new Date(privExpiry) < today : false;
+                        const isConacemExpired = conacemExpiry ? new Date(conacemExpiry) < today : false;
+
+                        return (
+                          <div key={dr.id} className="p-6 hover:bg-slate-50/50 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-6">
+                            <div className="space-y-3 flex-1">
+                              <div>
+                                <div className="flex items-center flex-wrap gap-2">
+                                  <p className="font-bold text-sm text-slate-800 uppercase tracking-tight">{dr.firstName} {dr.lastName}</p>
+                                  <span className="bg-slate-100 text-slate-700 text-[9.5px] font-black uppercase px-2 py-0.5 rounded border border-slate-200">
+                                    🏥 {dr.campus || 'Hermosillo'}
+                                  </span>
+                                  <span className="text-[9.5px] font-black uppercase px-2 py-0.5 rounded border bg-slate-100 text-slate-600 border-slate-200">
+                                    {dr.specialty}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-slate-400 font-bold mt-0.5">Fecha de Registro: {dr.enrollmentDate || 'N/A'}</p>
+                              </div>
+
+                              {/* Vigencias Detail Cards */}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                                {/* Punto 19: Privilegios */}
+                                <div className={`p-3 rounded-xl border flex flex-col justify-between gap-2 ${isPrivExpired ? 'bg-red-50/80 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                                  <div>
+                                    <div className="flex justify-between items-center mb-1">
+                                      <span className="text-[10px] font-extrabold uppercase text-slate-500">19. Vigencia Privilegios</span>
+                                      <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${isPrivExpired ? 'bg-red-100 text-red-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                                        {isPrivExpired ? 'Expirado' : 'Vigente'}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs font-bold text-slate-800">
+                                      Vence: <span className={isPrivExpired ? 'text-red-700 font-black' : 'text-slate-900'}>{privExpiry || 'No asignada'}</span>
+                                    </p>
+                                    <p className="text-[10px] text-slate-400">Calculado a 5 años de fecha de registro</p>
+                                  </div>
+
+                                  <button
+                                    onClick={() => handleUpdatePrivilegiosVigencia(dr.id)}
+                                    disabled={updatingVigenciaId === dr.id}
+                                    className="w-full mt-1 bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 text-[10px] font-bold uppercase tracking-wider py-1.5 rounded-lg flex items-center justify-center gap-1 transition-all cursor-pointer shadow-2xs"
+                                  >
+                                    <Clock className="w-3 h-3 text-primary" />
+                                    {updatingVigenciaId === dr.id ? 'Actualizando...' : '🔄 Actualizar Vigencia (+5 Años)'}
+                                  </button>
+                                </div>
+
+                                {/* Punto 20: CONACEM */}
+                                <div className={`p-3 rounded-xl border flex flex-col justify-between ${isConacemExpired ? 'bg-red-50/80 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                                  <div>
+                                    <div className="flex justify-between items-center mb-1">
+                                      <span className="text-[10px] font-extrabold uppercase text-slate-500">20. Vigencia CONACEM</span>
+                                      <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${!conacemExpiry ? 'bg-amber-100 text-amber-800' : isConacemExpired ? 'bg-red-100 text-red-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                                        {!conacemExpiry ? 'Pendiente Fecha' : isConacemExpired ? 'Expirado' : 'Vigente'}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs font-bold text-slate-800">
+                                      Vence: <span className={isConacemExpired ? 'text-red-700 font-black' : 'text-slate-900'}>{conacemExpiry || 'Sin digitalizar'}</span>
+                                    </p>
+                                    <p className="text-[10px] text-slate-400">Fecha del Certificado del Consejo</p>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

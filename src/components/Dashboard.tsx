@@ -746,7 +746,7 @@ export default function Dashboard({
                     <div className="space-y-3 mb-4">
                       <p className="text-[11px] text-red-950 font-bold leading-relaxed flex items-center gap-1 bg-red-50 p-2 rounded-lg border border-red-100/60">
                         <AlertTriangle className="w-4.5 h-4.5 text-[#af101a] flex-shrink-0" />
-                        <span>Alerta Sanitaria: Médicos bloqueados preventivamente para firmar notas clínicas:</span>
+                        <span>Alerta: Médicos bloqueados preventivamente para firmar notas clínicas:</span>
                       </p>
                       <div className="max-h-48 overflow-y-auto space-y-2 pr-1 no-scrollbar">
                         {allExpiredList.map((item, idx) => (
@@ -919,7 +919,20 @@ export default function Dashboard({
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
                   {/* Export Base de Datos Excel Button */}
                   <button
-                    onClick={() => exportCredentialingRosterToExcel(credentials)}
+                    onClick={async () => {
+                      try {
+                        // Fetch fresh live credentials directly from database
+                        const res = await fetch('/api/credentials');
+                        if (res.ok) {
+                          const freshDbCredentials = await res.json();
+                          exportCredentialingRosterToExcel(freshDbCredentials);
+                        } else {
+                          exportCredentialingRosterToExcel(credentials);
+                        }
+                      } catch (e) {
+                        exportCredentialingRosterToExcel(credentials);
+                      }
+                    }}
                     className="bg-emerald-700 hover:bg-emerald-800 text-white rounded-full px-4 py-2.5 text-xs font-bold transition-all cursor-pointer shadow-sm flex items-center justify-center gap-2 whitespace-nowrap"
                     title="Exportar base de datos completa de médicos a Excel (.xlsx)"
                   >
@@ -955,7 +968,7 @@ export default function Dashboard({
                     <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4.5 h-4.5" />
                     <input 
                       type="text"
-                      placeholder="Filtrar por nombre o NPI..."
+                      placeholder="Filtrar por nombre o Cédula..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                       className="bg-slate-50 border border-slate-200 rounded-full pl-10 pr-4 py-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary w-full text-slate-800"
@@ -1068,7 +1081,7 @@ export default function Dashboard({
                                   })()}
                                 </div>
                                 <p className="text-xs text-slate-400 font-medium mt-0.5">
-                                  Folio: <span className="font-extrabold text-slate-700 bg-slate-100 px-1 py-0.5 rounded mr-1">{cred.folio || 'N/A'}</span> | NPI: {cred.npi} | {cred.specialty} | 
+                                  Folio: <span className="font-extrabold text-slate-700 bg-slate-100 px-1 py-0.5 rounded mr-1">{cred.folio || 'N/A'}</span> | Cédula: {cred.npi} | {cred.specialty} | 
                                   Sede: <span className="text-[#af101a] font-bold uppercase text-[10px] bg-slate-100 px-1.5 py-0.5 rounded ml-0.5 mr-1">{cred.campus || 'Hermosillo'}</span> | 
                                   Tipo: <span className={`font-bold uppercase text-[10px] px-1.5 py-0.5 rounded ml-0.5 ${cred.physicianType === 'Externo' ? 'bg-amber-100 text-amber-900 border border-amber-200' : 'bg-red-50 text-[#af101a] border border-red-100'}`}>{cred.physicianType === 'Externo' ? 'Externo' : 'Staff'}</span>
                                 </p>

@@ -78,6 +78,8 @@ CREATE TABLE documentacion (
     privilegios VARCHAR(255) DEFAULT 'PENDIENTE',
     conacem VARCHAR(255) DEFAULT 'PENDIENTE',
     validacion_concacem VARCHAR(255) DEFAULT 'PENDIENTE',
+    vigencia_privilegios DATE,
+    vigencia_conacem DATE,
     ruta_archivos TEXT,
     firma_url TEXT
 );

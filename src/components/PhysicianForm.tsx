@@ -280,26 +280,25 @@ export default function PhysicianForm({
             Object.keys(data.filesByCategory).forEach(catKey => {
               const fileList = data.filesByCategory[catKey];
               if (fileList && fileList.length > 0) {
+                // Check if user attached a NEW unsaved blob file in the current session
                 const existingCat = normalizeCategoryData(next[catKey]);
-                const existingFileNames = new Set(existingCat.files.map(f => f.name));
-                const newServerFiles = fileList.filter((f: any) => !existingFileNames.has(f.name));
+                const freshBlobFiles = existingCat.files.filter(f => f.previewUrl && f.previewUrl.startsWith('blob:'));
                 
-                if (newServerFiles.length > 0 || existingCat.files.length === 0) {
-                  const combined = [
-                    ...existingCat.files,
-                    ...newServerFiles.map((f: any) => ({
-                      name: f.name,
-                      size: f.size,
-                      previewUrl: f.previewUrl,
-                      fromServerFolder: true,
-                      legibilityScore: 98,
-                      legibilityStatus: 'passed' as const,
-                      legibilityDetails: ['Archivo recuperado del expediente en servidor']
-                    }))
-                  ];
-                  next[catKey] = { files: combined };
-                  addedCount += newServerFiles.length;
-                }
+                const officialServerFiles = fileList.map((f: any) => ({
+                  name: f.name,
+                  size: f.size,
+                  previewUrl: f.previewUrl,
+                  fromServerFolder: true,
+                  legibilityScore: 98,
+                  legibilityStatus: 'passed' as const,
+                  legibilityDetails: ['Archivo oficial del expediente en servidor']
+                }));
+
+                // If fresh blob files exist, combine; otherwise replace with official server files
+                next[catKey] = {
+                  files: freshBlobFiles.length > 0 ? [...officialServerFiles, ...freshBlobFiles] : officialServerFiles
+                };
+                addedCount += fileList.length;
               }
             });
             if (addedCount > 0) {
@@ -3051,27 +3050,24 @@ const CredentialCard: React.FC<{
             {/* List of files */}
             <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
               {files.map((file, idx) => {
-                const isImage = file.name.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i) || (file.previewUrl && file.previewUrl.startsWith('blob:'));
+                const isImg = categoryKey === 'foto_perfil' || Boolean(
+                  file.name.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i) ||
+                  (file.type && file.type.startsWith('image/'))
+                );
                 return (
                   <div key={file.id || idx} className="flex flex-col gap-1.5 bg-slate-50 border border-slate-200/80 p-2 rounded-lg overflow-hidden transition-all hover:bg-slate-100/70">
                     <div className="flex items-center gap-2.5">
-                      {isImage ? (
+                      {isImg && file.previewUrl ? (
                         <div 
                           onClick={() => onViewPreview(idx)}
                           className="w-8 h-8 rounded-md overflow-hidden bg-white border border-slate-200 flex-shrink-0 cursor-zoom-in group relative"
                         >
                           <img 
-                            src={file.previewUrl || "https://images.unsplash.com/photo-1559839734-2b71ea197ec2?auto=format&fit=crop&q=80&w=150"} 
+                            src={file.previewUrl} 
                             className="w-full h-full object-cover group-hover:scale-110 transition-transform" 
                             alt={file.name}
                             onError={(e) => {
-                              const target = e.currentTarget;
-                              if (!target.dataset.tried) {
-                                target.dataset.tried = 'true';
-                                target.src = "https://images.unsplash.com/photo-1559839734-2b71ea197ec2?auto=format&fit=crop&q=80&w=150";
-                              } else {
-                                target.style.display = 'none';
-                              }
+                              e.currentTarget.style.display = 'none';
                             }}
                           />
                         </div>

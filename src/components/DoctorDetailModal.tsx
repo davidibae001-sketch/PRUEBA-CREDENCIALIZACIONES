@@ -379,7 +379,7 @@ export const DoctorDetailModal: React.FC<DoctorDetailModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-slate-700 font-bold mb-1">Cédula Profesional (NPI)</label>
+                  <label className="block text-slate-700 font-bold mb-1">Cédula Profesional</label>
                   <input
                     type="text"
                     placeholder="Ej. 12345678"

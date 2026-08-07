@@ -34,6 +34,9 @@ export interface DoctorCredential {
   tituloExpiryDate?: string | null;
   consejoExpiryDate?: string | null;
   ineExpiryDate?: string | null;
+  vigenciaPrivilegios?: string | null;
+  vigenciaConacem?: string | null;
+  estatusVigConacem?: 'VENCIDA' | 'VIGENTE' | 'PENDIENTE' | string;
   physicianType?: string;
   phone?: string;
   email?: string;

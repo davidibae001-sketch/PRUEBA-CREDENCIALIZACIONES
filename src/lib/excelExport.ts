@@ -215,9 +215,20 @@ export function exportCredentialingRosterToExcel(
       // Documentación con Vigencia (19-20)
       checkDocStatus(cred, ['solicitud_priv', '19_SOLICITUD_PRIVILEGIOS_ESPECIALIDAD', 'SOLICITUD_PRIVILEGIOS'], 'OTORGADA'),
       checkDocStatus(cred, ['consejo', '20_CERTIFICADO_CONSEJO_ESPECIALIDAD', 'CONACEM']),
-      (checkDocStatus(cred, ['consejo', '20_CERTIFICADO_CONSEJO_ESPECIALIDAD', 'CONACEM']) === 'COMPLETADO'
-        ? (cred.consejoExpiryDate || cred.documentExpirations?.['consejo'] || cred.documentExpirations?.['CONACEM'] || 'VIGENTE')
-        : 'PENDIENTE'),
+      (() => {
+        const conacemExpDate = cred.vigenciaConacem || cred.consejoExpiryDate || cred.documentExpirations?.['consejo'] || cred.documentExpirations?.['CONACEM'] || null;
+        let estatusVigConacem = cred.estatusVigConacem;
+        if (!estatusVigConacem) {
+          if (conacemExpDate && typeof conacemExpDate === 'string') {
+            estatusVigConacem = isConacemExpired(conacemExpDate) ? 'VENCIDA' : 'VIGENTE';
+          } else if (checkDocStatus(cred, ['consejo', '20_CERTIFICADO_CONSEJO_ESPECIALIDAD', 'CONACEM']) === 'COMPLETADO') {
+            estatusVigConacem = 'VIGENTE';
+          } else {
+            estatusVigConacem = 'VENCIDA';
+          }
+        }
+        return conacemExpDate ? `${estatusVigConacem} (${conacemExpDate})` : estatusVigConacem;
+      })(),
       checkDocStatus(cred, ['consejo_val_conacem', '20_1_VALIDACION_CONACEM'], 'VALIDADA')
     ];
 
@@ -337,13 +348,12 @@ export function exportCredentialingRosterToExcel(
         } else if (C >= 14) {
           // Document Status & Expiration Date Cells
           const upperVal = cellValStr.toUpperCase();
-          const isStandardCompleted = ['COMPLETADO', 'RECIBIDA', 'OTORGADA', 'VALIDADA', 'VIGENTE'].includes(upperVal);
-          const isNonExpiredDate = upperVal !== 'PENDIENTE' && !isConacemExpired(cellValStr);
-          const isCompleted = isStandardCompleted || isNonExpiredDate;
+          const isExplicitVencida = upperVal.includes('VENCIDA') || upperVal.includes('VENCIDO') || upperVal.includes('PENDIENTE') || isConacemExpired(cellValStr);
+          const isCompleted = (upperVal.includes('COMPLETADO') || upperVal.includes('RECIBIDA') || upperVal.includes('OTORGADA') || upperVal.includes('VALIDADA') || upperVal.includes('VIGENTE')) && !isExplicitVencida;
 
           cell.s = {
             font: { name: 'Calibri', sz: 9, bold: true, color: { rgb: isCompleted ? '137333' : 'C5221F' } },
-            fill: { fgColor: { rgb: isCompleted ? 'E6F4EA' : 'FCE8E6' } },
+            fill: { fgColor: { rgb: isCompleted ? 'E6F4EA' : 'FCE8E6' } }, // Green if VIGENTE/COMPLETADO, Red if VENCIDA/PENDIENTE
             alignment: { horizontal: 'center', vertical: 'center' },
             border: {
               top: { style: 'thin', color: { rgb: 'CBD5E1' } },
